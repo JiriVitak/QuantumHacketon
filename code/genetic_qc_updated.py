@@ -12,7 +12,7 @@ import pandas as pd
 
 
 # Read-in error table
-df = pd.read_csv('../ibm_aachen_calibrations_2025-06-19T09_34_49Z.csv')
+df = pd.read_csv('ibm_aachen_calibrations_2025-06-19T09_34_49Z.csv')
 # print(df.head())
 
 mean_RX_error = df.loc[df['RX error '] != 1.0, 'RX error '].mean()
@@ -43,13 +43,13 @@ print(f"mean Gate time (ns) : {mean_Gate_time}")
 # Configuration
 NUM_QUBITS = 3
 POP_SIZE = 100
-N_GEN = 100
-MUTATION_RATE = 0.5
+N_GEN = 500
+MUTATION_RATE = 0.3
 CROSSOVER_RATE = 0.6
-ELITE_SIZE = 20
-LAMBDA_DEPTH = 0.1
+ELITE_SIZE = 5
+LAMBDA_DEPTH = 0.01
 LAMBDA_CNOT = 0.1
-LAMBDA_GATE = 0.25*1e3
+LAMBDA_GATE = 1e1
 
 # Target distribution
 x = np.arange(2**NUM_QUBITS)
@@ -63,7 +63,8 @@ def kl_divergence(p, q, eps=1e-10):
     q = np.clip(q, eps, 1)
     return np.sum(p * np.log(p / q))
 
-GATES = ['h', 'x', 'y', 'z', 'rx', 'ry', 'rz', 'cx', 'sx', 'cz']
+#GATES = ['h', 'x', 'y', 'z', 'rx', 'ry', 'rz', 'cx', 'sx', 'cz']
+GATES = ['h', 'x', 'y', 'z', 'rx', 'ry', 'rz', 'sx', 'cz']
 
 
 def random_gate():
@@ -117,13 +118,40 @@ def fitness(ind):
     penalty_cnot = LAMBDA_CNOT * cnot_count
     gate_error_penalty *= LAMBDA_GATE
     print(f"penalty depth: {penalty_depth}, penalty cnot: {penalty_cnot}, kl: {kl}, gate error penalty: {gate_error_penalty}")
-    return -(kl + penalty_depth + penalty_cnot + gate_error_penalty)  # maximize negative loss
+    return -(kl + gate_error_penalty)  # maximize negative loss
+
+#def fitness_tvd(ind):
+#    qc = build_circuit(ind)
+#    state = Statevector.from_instruction(qc)
+#    probs = np.abs(state.data)**2
+#    return -0.5 * np.sum(abs(p_target - probs))
 
 def fitness_tvd(ind):
     qc = build_circuit(ind)
     state = Statevector.from_instruction(qc)
     probs = np.abs(state.data)**2
-    return -0.5 * np.sum(abs(p_target - probs))
+    penalty_depth = LAMBDA_DEPTH * qc.depth()
+
+    gate_error_penalty = 0
+    for gate in ind:
+        if gate[0] == 'cx':
+            cnot_count += 1
+        elif gate[0] == 'rx':
+            gate_error_penalty += mean_RX_error
+        elif gate[0] == 'sx':
+            gate_error_penalty += mean_SX_error
+        elif gate[0] == 'x':
+            gate_error_penalty += mean_X_error
+        elif gate[0] == 'cz':
+            gate_error_penalty += mean_CZ_error
+
+    # Penalize based on number of CNOTs
+    penalty_cnot = LAMBDA_CNOT * cnot_count
+    gate_error_penalty *= LAMBDA_GATE
+    tvd = 0.5 * np.sum(abs(p_target - probs))
+    print(f"penalty depth: {penalty_depth}, penalty cnot: {penalty_cnot}, tvd: {tvd}, gate error penalty: {gate_error_penalty}")
+    return -(tvd + penalty_depth + penalty_cnot + gate_error_penalty) # maximize negative loss
+
 
 # GA functions
 def mutate(ind):
@@ -210,7 +238,7 @@ while len(population) < POP_SIZE:
 best_fitness = -np.inf
 best_individual = None
 for gen in range(N_GEN):
-    fitnesses = [fitness_tvd(ind) for ind in population]
+    fitnesses = [fitness(ind) for ind in population]
     max_fit = max(fitnesses)
     print(f"Gen {gen}, best fitness: {-max_fit:.4f}")
     if max_fit > best_fitness:
