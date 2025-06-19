@@ -9,6 +9,8 @@ import matplotlib.pyplot as plt
 from qiskit import QuantumCircuit
 from qiskit.quantum_info import Statevector
 import pandas as pd
+from qiskit_experiments.library import StateTomography
+from qiskit.quantum_info import DensityMatrix, state_fidelity
 
 
 # Read-in error table
@@ -42,20 +44,28 @@ print(f"mean Gate time (ns) : {mean_Gate_time}")
 
 # Configuration
 NUM_QUBITS = 3
-POP_SIZE = 100
-N_GEN = 500
+POP_SIZE = 10
+N_GEN = 50
 MUTATION_RATE = 0.3
+alpha = 0.999  # for softmax selection
 CROSSOVER_RATE = 0.6
 ELITE_SIZE = 5
 LAMBDA_DEPTH = 0.01
-LAMBDA_CNOT = 0.1
+LAMBDA_CZ = 0.1
 LAMBDA_GATE = 1e1
 
 # Target distribution
-x = np.arange(2**NUM_QUBITS)
-p_target = np.exp(-0.5 * ((x - 3.5) / 1.0)**2)
-p_target /= np.sum(p_target)
+#x = np.arange(2**NUM_QUBITS)
+#p_target = np.exp(-0.5 * ((x - 3.5) / 1.0)**2)
+#p_target /= np.sum(p_target)
+p_target = np.array([1, 0, 0, 0, 0, 0, 0, 1]) / 2
+#psi_target = np.sqrt(p_target)
 psi_target = np.sqrt(p_target)
+
+state_target = np.array([1, 0, 0, 0, 0, 0, 0, 1])/ np.sqrt(2)  # GHZ state for 3 qubits
+rho_target = DensityMatrix(state_target)
+#print("Target density matrix:")
+#print(rho_target)
 
 # Helper functions
 def kl_divergence(p, q, eps=1e-10):
@@ -95,8 +105,21 @@ def build_circuit(gates):
 
 def fitness(ind):
     qc = build_circuit(ind)
-    state = Statevector.from_instruction(qc)
-    probs = np.abs(state.data)**2
+    qc.measure_all()
+
+    shots = 1000
+    simulator = AerSimulator(method='statevector', noise_model=None)
+    job = simulator.run(qc, shots=shots)
+    result = job.result()
+    counts = result.get_counts()
+
+    prob_dist = np.zeros(2**NUM_QUBITS)
+    for key, value in counts.items():
+        prob_dist[int(key, 2)] = value / shots
+    probs = prob_dist
+    #state = Statevector.from_instruction(qc)
+    #probs = np.abs(state.data)**2
+
     kl = kl_divergence(p_target, probs)
     penalty_depth = LAMBDA_DEPTH * qc.depth()
     cnot_count = 0
@@ -115,28 +138,25 @@ def fitness(ind):
             gate_error_penalty += mean_CZ_error
 
     # Penalize based on number of CNOTs
-    penalty_cnot = LAMBDA_CNOT * cnot_count
     gate_error_penalty *= LAMBDA_GATE
-    print(f"penalty depth: {penalty_depth}, penalty cnot: {penalty_cnot}, kl: {kl}, gate error penalty: {gate_error_penalty}")
+    print(f"penalty depth: {penalty_depth}, kl: {kl}, gate error penalty: {gate_error_penalty}")
     return -(kl + gate_error_penalty)  # maximize negative loss
 
-#def fitness_tvd(ind):
-#    qc = build_circuit(ind)
-#    state = Statevector.from_instruction(qc)
-#    probs = np.abs(state.data)**2
-#    return -0.5 * np.sum(abs(p_target - probs))
+def fitness_state_fidelity(ind):
+    simulator = AerSimulator(method='statevector', noise_model=None)
 
-def fitness_tvd(ind):
-    qc = build_circuit(ind)
-    state = Statevector.from_instruction(qc)
-    probs = np.abs(state.data)**2
-    penalty_depth = LAMBDA_DEPTH * qc.depth()
+    qc = build_circuit(ind) 
+    qc_tomography = StateTomography(qc)
+    qc_data = qc_tomography.run(simulator).block_for_results()
+    state_result = (qc_data.analysis_results("state", dataframe=True)).iloc[0]
+    #print(state_result.value)
+    state_rho = state_result.value
+    #print(f"State result: {state_rho}")
+    state_fidelity_ = state_fidelity(state_rho, rho_target)
 
     gate_error_penalty = 0
     for gate in ind:
-        if gate[0] == 'cx':
-            cnot_count += 1
-        elif gate[0] == 'rx':
+        if gate[0] == 'rx':
             gate_error_penalty += mean_RX_error
         elif gate[0] == 'sx':
             gate_error_penalty += mean_SX_error
@@ -146,11 +166,9 @@ def fitness_tvd(ind):
             gate_error_penalty += mean_CZ_error
 
     # Penalize based on number of CNOTs
-    penalty_cnot = LAMBDA_CNOT * cnot_count
     gate_error_penalty *= LAMBDA_GATE
-    tvd = 0.5 * np.sum(abs(p_target - probs))
-    print(f"penalty depth: {penalty_depth}, penalty cnot: {penalty_cnot}, tvd: {tvd}, gate error penalty: {gate_error_penalty}")
-    return -(tvd + penalty_depth + penalty_cnot + gate_error_penalty) # maximize negative loss
+    print(f"State infidelity: {1 - state_fidelity_:.4f}", "gate error penalty: ", gate_error_penalty)
+    return -(1 - state_fidelity_ + gate_error_penalty)  # maximize negative loss
 
 
 # GA functions
@@ -168,14 +186,14 @@ def crossover(p1, p2):
     point = random.randint(1, min(len(p1), len(p2)) - 1)
     return p1[:point] + p2[point:]
 
-def softmax(x, temperature=0.5): # higher temperature makes the distribution more flat (more uniform selection)
+def softmax(x, temperature=0.2): # higher temperature makes the distribution more flat (more uniform selection)
     # recomended temperature [0.1, 0.8]
     x = np.array(x)
     x = x - np.max(x)  # For numerical stability
     exps = np.exp(x / temperature)
     return exps / np.sum(exps)
 
-def select(pop, fitnesses, temperature=0.5):
+def select(pop, fitnesses, temperature=0.2):
     probs = softmax(fitnesses, temperature)
     selected = random.choices(pop, weights=probs, k=ELITE_SIZE)
     return selected
@@ -238,7 +256,7 @@ while len(population) < POP_SIZE:
 best_fitness = -np.inf
 best_individual = None
 for gen in range(N_GEN):
-    fitnesses = [fitness(ind) for ind in population]
+    fitnesses = [fitness_state_fidelity(ind) for ind in population]
     max_fit = max(fitnesses)
     print(f"Gen {gen}, best fitness: {-max_fit:.4f}")
     if max_fit > best_fitness:
@@ -254,6 +272,7 @@ for gen in range(N_GEN):
             child = crossover(p1, p2)
         new_pop.append(child)
     population = new_pop
+    MUTATION_RATE *= alpha  # decay mutation rate
 
 # Evaluate best individual
 qc_best = build_circuit(best_individual)
