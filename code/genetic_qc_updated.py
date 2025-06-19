@@ -11,6 +11,7 @@ from qiskit.quantum_info import Statevector
 import pandas as pd
 from qiskit_experiments.library import StateTomography
 from qiskit.quantum_info import DensityMatrix, state_fidelity
+from qiskit import qpy
 
 
 # Read-in error table
@@ -44,15 +45,15 @@ print(f"mean Gate time (ns) : {mean_Gate_time}")
 
 # Configuration
 NUM_QUBITS = 3
-POP_SIZE = 10
-N_GEN = 50
-MUTATION_RATE = 0.3
+POP_SIZE = 50
+N_GEN = 3
+MUTATION_RATE = 0.5
 alpha = 0.999  # for softmax selection
 CROSSOVER_RATE = 0.6
 ELITE_SIZE = 5
 LAMBDA_DEPTH = 0.01
 LAMBDA_CZ = 0.1
-LAMBDA_GATE = 1e1
+LAMBDA_GATE = 2.38691
 
 # Target distribution
 #x = np.arange(2**NUM_QUBITS)
@@ -152,7 +153,7 @@ def fitness_state_fidelity(ind):
     #print(state_result.value)
     state_rho = state_result.value
     #print(f"State result: {state_rho}")
-    state_fidelity_ = state_fidelity(state_rho, rho_target)
+    state_fidelity_ = state_fidelity(state_rho, state_target, validate=True)
 
     gate_error_penalty = 0
     for gate in ind:
@@ -167,8 +168,8 @@ def fitness_state_fidelity(ind):
 
     # Penalize based on number of CNOTs
     gate_error_penalty *= LAMBDA_GATE
-    print(f"State infidelity: {1 - state_fidelity_:.4f}", "gate error penalty: ", gate_error_penalty)
-    return -(1 - state_fidelity_ + gate_error_penalty)  # maximize negative loss
+    print(f"State fidelity: {state_fidelity_:.4f}", "gate error penalty: ", gate_error_penalty)
+    return state_fidelity_ - gate_error_penalty # maximize negative loss
 
 
 # GA functions
@@ -194,8 +195,12 @@ def softmax(x, temperature=0.2): # higher temperature makes the distribution mor
     return exps / np.sum(exps)
 
 def select(pop, fitnesses, temperature=0.2):
-    probs = softmax(fitnesses, temperature)
-    selected = random.choices(pop, weights=probs, k=ELITE_SIZE)
+    #probs = softmax(fitnesses, temperature)
+    # selected = random.choices(pop, weights=probs, k=ELITE_SIZE)
+
+    elite_indices = np.argsort(fitnesses)[-ELITE_SIZE:]
+    selected = [pop[i] for i in elite_indices]
+
     return selected
 
 def random_individual(length=10):
@@ -258,7 +263,7 @@ best_individual = None
 for gen in range(N_GEN):
     fitnesses = [fitness_state_fidelity(ind) for ind in population]
     max_fit = max(fitnesses)
-    print(f"Gen {gen}, best fitness: {-max_fit:.4f}")
+    print(f"Gen {gen}, best fitness: {max_fit:.4f}")
     if max_fit > best_fitness:
         best_fitness = max_fit
         best_individual = population[np.argmax(fitnesses)]
@@ -276,11 +281,18 @@ for gen in range(N_GEN):
 
 # Evaluate best individual
 qc_best = build_circuit(best_individual)
+# save the best circuit
+with open("test.qpy", "wb") as file:
+    qpy.dump(qc_best, file)
+
 print("Done.")
 print("Best individual info:")
 print("Circuit depth:", qc_best.depth())
 print(qc_best.draw(output='text'))
 state_best = Statevector.from_instruction(qc_best)
+rho_best = DensityMatrix(state_best)
+print("Best individual density matrix:")
+print(rho_best)
 probs_best = np.abs(state_best.data) ** 2
 kl_best = kl_divergence(p_target, probs_best)
 
