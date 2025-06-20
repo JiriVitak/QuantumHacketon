@@ -8,7 +8,7 @@ import pandas as pd
 
 
 # Read-in error table
-df = pd.read_csv('ibm_aachen_calibrations_2025-06-19T09_34_49Z.csv')
+df = pd.read_csv('C:/Users/jiriv/Documents/škola/Hackathon_2025/QuantumHacketon/code/monte_carlo/ibm_aachen_calibrations_2025-06-19T09_34_49Z.csv')
 # print(df.head())
 
 mean_RX_error = df.loc[df['RX error '] != 1.0, 'RX error '].mean()
@@ -273,11 +273,13 @@ for i, theta in enumerate(thetas):
 state_full = Statevector.from_instruction(qc_full)
 
 state_data = state_full.data.reshape(-1, 2)
+print(state_data)
 probs_helper_1 = np.abs(state_data[:, 1])**2
+print(probs_helper_1)
 estimated_integral = np.sum(probs_helper_1)
 print(f"Estimated integral from oracle estimate: {estimated_integral}")
 
-from scipy.integrate import cumtrapz
+from scipy.integrate import cumulative_trapezoid as cumtrapz
 
 estimated_cumulative = np.cumsum(probs_helper_1)
 true_cumulative = cumtrapz(f_vals, x_vals, initial=0)
@@ -296,9 +298,14 @@ plt.grid(True)
 print("Done.")
 print("Best individual info:")
 print("Circuit depth:", qc_best.depth())
-print(qc_best.draw(output='text'))
+print(qc_full.draw(output='text'))
 state_best = Statevector.from_instruction(qc_best)
 probs_best = np.abs(state_best.data) ** 2
+
+from qiskit import qpy
+
+with open("sin^2.qpy", "wb") as file:
+    qpy.dump(qc_full, file)
 
 print(f"Best fidelity: {np.sum(np.sqrt(probs_best*p_target))**2}")
 
